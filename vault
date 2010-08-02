@@ -32,6 +32,7 @@ class Vault(object):
     STRUCT_ITEM = '<L64p'
 
     def __init__(self, options):
+        self.options = options
         self.filename = os.path.expanduser(options.filename)
         if options.keyfile:
             self.secret = file(options.keyfile).read().strip()
@@ -41,6 +42,8 @@ class Vault(object):
     # checks
 
     def check_perms(self):
+        self.debug('Checking file permissions of %s' % (self.filename,))
+
         if not os.path.isfile(self.filename):
             return
 
@@ -56,9 +59,14 @@ class Vault(object):
         if not good:
             self.info('%s: fixed permissions' % (self.filename,))
             os.chmod(self.filename, 0600)
+        else:
+            self.debug('Permissions OK')
 
     def check_vault(self):
+        self.debug('Checking vault status')
+        umask = os.umask(0077)
         self.db = sqlite3.connect(self.filename, isolation_level=None)
+        os.umask(umask)
         cursor = self.db.cursor()
         try:
             self.db.execute('''
@@ -84,6 +92,15 @@ class Vault(object):
             self.db.commit()
         finally:
             cursor.close()
+
+    def destroy_vault(self):
+        '''
+        Remove the vault, this will remove the vault database completely
+        and render this instance useless! Be warned!
+        '''
+        self.debug('Destorying vault file %s' % (self.filename,))
+        self.db.close()
+        os.unlink(self.filename)
 
     # main stuff
 
@@ -139,18 +156,8 @@ class Vault(object):
         Removes <name> from <section> in the vault.
         '''
         self.check_crypt()
-        cursor = self.db.cursor()
-        try:
-            delete = '''
-                DELETE FROM item
-                 WHERE section_name = ?
-                   AND name = ?;
-                '''
-            cursor.execute(delete, (section, self.encrypt(name)))
-            self.db.commit()
-            self.info('Done')
-        finally:
-            cursor.close()
+        self.db_del(section, name)
+        self.info('Done')
 
     def do_get(self, section, *args):
         '''
@@ -160,47 +167,41 @@ class Vault(object):
         the details about the entry.
         '''
         self.check_crypt()
-        cursor = self.db.cursor()
-        try:
-            if args:
-                name = args[0]
-                select = '''
-                    SELECT name, password, description, date_created, date_updated
-                      FROM item
-                    WHERE section_name = ?
-                      AND name = ?;
-                    '''
-                cursor.execute(select, (section, self.encrypt(name),))
-                result = cursor.fetchone()
-                if result:
-                    headings = ['name', 'password', 'description', 'date_created', 'date_updated']
-                    for x in xrange(0, len(headings)):
-                        sys.stdout.write(headings[x].replace('_', ' ').ljust(12, '.'))
-                        sys.stdout.write(': ')
-                        if headings[x].startswith('date_'):
-                            sys.stdout.write(datetime.datetime.utcfromtimestamp(result[x]).strftime('%D %T'))
-                        elif x < 2:
-                            sys.stdout.write(self.decrypt(result[x]))
-                        elif result[x]:
-                            sys.stdout.write(result[x])
-                        sys.stdout.write('\n')
-                else:
-                    self.fail('No entries found')
+        if args:
+            name = args[0]
+            select = '''
+                SELECT name, password, description, date_created, date_updated
+                  FROM item
+                WHERE section_name = ?
+                  AND name = ?;
+                '''
+            result = self.db_query_one(select, self.encrypt(section), self.encrypt(name))
+            if result:
+                headings = ['name', 'password', 'description', 'date_created', 'date_updated']
+                for x in xrange(0, len(headings)):
+                    sys.stdout.write(headings[x].replace('_', ' ').ljust(12, '.'))
+                    sys.stdout.write(': ')
+                    if headings[x].startswith('date_'):
+                        sys.stdout.write(datetime.datetime.utcfromtimestamp(result[x]).strftime('%D %T'))
+                    elif x < 2:
+                        sys.stdout.write(self.decrypt(result[x]))
+                    elif result[x]:
+                        sys.stdout.write(result[x])
+                    sys.stdout.write('\n')
             else:
-                select = '''
-                    SELECT name, password
-                      FROM item
-                     WHERE section_name = ?;
-                     '''
-                cursor.execute(select, (section,))
-                result = cursor.fetchall()
-                if result:
-                    result = [map(self.decrypt, (name, password)) for name, password in result]
-                    self.table(result, 'name', 'password', color=0)
-                else:
-                    self.fail('No entries found')
-        finally:
-            cursor.close()
+                self.fail('No entries found')
+        else:
+            select = '''
+                SELECT name, password
+                  FROM item
+                 WHERE section_name = ?;
+                 '''
+            result = self.db_query_all(select, self.encrypt(section))
+            if result:
+                result = [map(self.decrypt, (name, password)) for name, password in result]
+                self.table(result, 'name', 'password', color=0)
+            else:
+                self.fail('No entries found')
 
     def do_list(self, section=None):
         '''
@@ -209,24 +210,26 @@ class Vault(object):
         Show all sections and their entries.
         '''
         self.check_crypt()
-        cursor = self.db.cursor()
-        try:
+        if section:
             select = '''
                 SELECT section_name, name, date_created
                   FROM item
-                 ORDER BY section_name, name;
+                 WHERE section_name = ?
                 '''
-            cursor.execute(select)
-            result = cursor.fetchall()
-            if result:
-                result = [(section, self.decrypt(name), 
-                    datetime.datetime.utcfromtimestamp(date).strftime('%D %T')) \
-                    for section, name, date in result]
-                self.table(result, 'section', 'name', 'date created', color=1)
-            else:
-                self.fail('No data found')
-        finally:
-            cursor.close()
+            result = self.db_query_all(select, self.encrypt(section))
+        else:
+            select = '''
+                SELECT section_name, name, date_created
+                  FROM item;
+                '''
+            result = self.db_query_all(select)
+        if result:
+            result = [(self.decrypt(section), self.decrypt(name), 
+                datetime.datetime.utcfromtimestamp(date).strftime('%D %T')) \
+                for section, name, date in result]
+            self.table(result, 'section', 'name', 'date created', color=1)
+        else:
+            self.fail('No data found')
 
     def do_set(self, section, name):
         '''
@@ -246,10 +249,27 @@ class Vault(object):
         p2 = self.ask_password('Password (confirm): ')
         if p1 != p2:
             self.fail('Password confirmation failed')
-        self.db_set(section, self.encrypt(name), self.encrypt(p1))
+        self.db_set(section, name, p1)
         self.info('Password set')
 
     # database stuff
+
+    def db_query(self, query, *args):
+        self.debug('SQL: %s (args=%r)' % (query, args))
+
+        cursor = self.db.cursor()
+        try:
+            result = cursor.execute(query, args)
+            self.debug('SQL: Got %d rows' % (result.rowcount,))
+            return result
+        finally:
+            cursor.close()
+
+    def db_query_all(self, query, *args):
+        return self.db_query(query, *args).fetchall()
+
+    def db_query_one(self, query, *args):
+        return self.db_query(query, *args).fetchone()
 
     def db_check_section(self, section):
         cursor = self.db.cursor()
@@ -259,7 +279,7 @@ class Vault(object):
                   FROM section
                  WHERE name = ?;
                 '''
-            result = self.db.execute(select, (section,))
+            result = self.db.execute(select, (self.encrypt(section),))
             if result.fetchone() is None:
                 insert = '''
                     INSERT INTO section
@@ -267,13 +287,22 @@ class Vault(object):
                     VALUES
                         (?);
                     '''
-                self.db.execute(insert, (section,))
+                self.db.execute(insert, (self.encrypt(section),))
                 self.db.commit()
                 return False
             else:
                 return True
         finally:
             cursor.close()
+
+    def db_del(self, section, name):
+        delete = '''
+            DELETE FROM item
+             WHERE section_name = ?
+               AND name = ?;
+            '''
+        self.db_query(delete, self.encrypt(section), self.encrypt(name))
+        self.db.commit()
 
     def db_set(self, section, name, password):
         cursor = self.db.cursor()
@@ -284,7 +313,7 @@ class Vault(object):
                  WHERE section_name = ?
                    AND name = ?;
                 '''
-            result = self.db.execute(select, (section, name))
+            result = self.db.execute(select, (self.encrypt(section), self.encrypt(name)))
             exists = result.fetchone()
             if exists is None:
                 insert = '''
@@ -293,7 +322,8 @@ class Vault(object):
                     VALUES
                         (?, ?, ?, ?, ?);
                     '''
-                self.db.execute(insert, (section, name, password, time.time(), time.time()))
+                self.db.execute(insert, (self.encrypt(section), self.encrypt(name), 
+                    password, time.time(), time.time()))
             else:
                 update_id = exists[0]
                 update = '''
@@ -302,7 +332,7 @@ class Vault(object):
                            date_updated = ?
                      WHERE rowid = ?;
                     '''
-                self.db.execute(update, (password, time.time(), update_id))
+                self.db.execute(update, (self.encrypt(password), time.time(), update_id))
             self.db.commit()
         finally:
             cursor.close()
@@ -339,19 +369,21 @@ class Vault(object):
                 pack = self.crypto.decrypt(data, fixlength=1)
                 size, data = struct.unpack(self.STRUCT_ITEM, pack)
                 if len(data) != size:
-                    self.fail('Invalid key')
+                    self.fail('Invalid key (%d <> %d)' % (len(data), size))
                 else:
                     return data.split('\x00')[0]
-            except (binascii.Error, struct.error, SystemError):
-                #raise
+            except (binascii.Error, struct.error, SystemError), e:
+                self.debug('Exception: %s' % (str(e),))
                 self.fail('Invalid key')
         finally:
             self.crypto.reinit()
 
     def check_crypt(self):
         if not hasattr(self, 'secret'):
+            self.debug('No secret found, asking the user')
             self.secret = self.ask_password('Encryption key: ')
         if not hasattr(self, 'crypto'):
+            self.debug('No crypto found, initialising mcrypt')
             self.crypto = mcrypt.MCRYPT('rijndael-256', 'ecb')
             if len(self.secret) < self.crypto.get_key_size():
                 self.crypto.init(self.secret.ljust(self.crypto.get_key_size(), '\x00'))
@@ -361,40 +393,47 @@ class Vault(object):
             self.check_uuid()
 
     def check_uuid(self):
-        cursor = self.db.cursor()
-        try:
-            select = '''
-                SELECT uuid
-                  FROM vault;
+        self.debug('Checking the vault uuid')
+        select = '''
+            SELECT uuid
+              FROM vault;
+            '''
+        result = self.db_query_one(select)
+        if result is None:
+            import uuid
+            insert = '''
+                INSERT INTO vault
+                    (uuid)
+                VALUES
+                    (?);
                 '''
-            cursor.execute(select)
-            result = cursor.fetchone()
-            if result is None:
-                import uuid
-                insert = '''
-                    INSERT INTO vault
-                        (uuid)
-                    VALUES
-                        (?);
-                    '''
-                self.padding = ''.join(map(str, [uuid.uuid4(), uuid.uuid4()]))
-                check = self.encrypt(self.padding)
-                cursor.execute(insert, (check,))
-            else:
-                self.padding = self.decrypt(result[0])
-        finally:
-            cursor.close()
+            self.padding = ''.join(map(str, [uuid.uuid4(), uuid.uuid4()])).replace('-', '')
+            check = self.encrypt(self.padding)
+            #cursor.execute(insert, (check,))
+            self.db_query(insert, check)
+        else:
+            self.padding = self.decrypt(result[0])
+            self.debug('Got %d bytes of padding data' % (len(self.padding,)))
 
     # help stuff
 
+    def echo(self, color, section, message):
+        sys.stderr.write(''.join([color, section + ' ', ANSI.NORMAL,
+            textwrap.dedent(message), '\n']))
+        sys.stderr.flush()
+
+    def debug(self, message):
+        if self.options.verbose:
+            self.echo(ANSI.BLUE, 'DBUG', message)
+
     def info(self, message):
-        sys.stderr.write(''.join([ANSI.YELLOW, 'INFO ', ANSI.NORMAL, message, '\n']))
+        self.echo(ANSI.YELLOW, 'INFO', message)
 
     def warn(self, message):
-        sys.stderr.write(''.join([ANSI.RED, 'WARN ', ANSI.NORMAL, message, '\n']))
+        self.echo(ANSI.RED, 'WARN', message)
 
     def fail(self, message):
-        sys.stderr.write(''.join([ANSI.RED, 'FAIL ', ANSI.NORMAL, message, '\n']))
+        self.echo(ANSI.RED, 'FAIL', message)
         sys.exit(1)
 
     def table(self, result, *headings, **kwargs):
@@ -402,6 +441,11 @@ class Vault(object):
             color = kwargs.pop('color')
         else:
             color = None
+
+            if color:
+                self.debug('Dumping %d rows, colorizing column %d' % (len(result), color))
+            else:
+                self.debug('Dumping %d rows' % (len(result),))
 
         # Insert headings
         result.insert(0, [h.title() for h in headings])
@@ -449,6 +493,8 @@ def run():
         help='vault filename (default: ~/.vault)')
     parser.add_option('-k', '--keyfile', dest='keyfile', default='',
         help='vault keyfile filename (default: no file)')
+    parser.add_option('-v', '--verbose', dest='verbose', action='store_true',
+        help='be verbose (default: no)')
 
     options, args = parser.parse_args()
 
