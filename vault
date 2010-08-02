@@ -110,6 +110,7 @@ class Vault(object):
             try:
                 return hook(*args[1:])
             except TypeError:
+                raise
                 return self.do_help(args[0])
         else:
             self.fail('No such command: %s' % (args[0],))
@@ -224,7 +225,7 @@ class Vault(object):
                     datetime.datetime.utcfromtimestamp(date).strftime('%D %T')) \
                     for section, name, date in result]
                 result.sort()
-                self.table(result, 'section', 'name', 'date created', color=1)
+                self.table(result, 'section', 'name', 'date_created', color=1)
                 return 0
         else:
             select = '''
@@ -442,6 +443,9 @@ class Vault(object):
         sys.exit(1)
 
     def table(self, result, *headings, **kwargs):
+        if self.options.machine:
+            return self.table_machine(result, *headings, **kwargs)
+
         if 'color' in kwargs:
             color = kwargs.pop('color')
         else:
@@ -453,7 +457,7 @@ class Vault(object):
                 self.debug('Dumping %d rows' % (len(result),))
 
         # Insert headings
-        result.insert(0, [h.title() for h in headings])
+        result.insert(0, [h.title().replace('_', ' ') for h in headings])
 
         # Calculate heading sizes
         sizes = [1] * len(headings)
@@ -490,16 +494,26 @@ class Vault(object):
             sys.stdout.write('\n')
         sys.stdout.flush()
 
+    def table_machine(self, result, *headings, **kwargs):
+        for row in [list(headings)] + list(result):
+            sys.stdout.write(self.options.machine_sep.join(row))
+            sys.stdout.write('\n')
+        sys.stdout.flush()
+
 def run():
     import optparse
 
     parser = optparse.OptionParser(usage='%prog [<options>] <command> [<args>]')
+    parser.add_option('-v', '--verbose', dest='verbose', action='store_true',
+        help='be verbose (default: no)')
     parser.add_option('-f', '--file', dest='filename', default='~/.vault',
         help='vault filename (default: ~/.vault)')
     parser.add_option('-k', '--keyfile', dest='keyfile', default='',
         help='vault keyfile filename (default: no file)')
-    parser.add_option('-v', '--verbose', dest='verbose', action='store_true',
-        help='be verbose (default: no)')
+    parser.add_option('-m', '--machine', dest='machine', action='store_true',
+        help='produce machine-parsable output (default: no)')
+    parser.add_option('-s', '--machine-sep', dest='machine_sep', default='\t',
+        help='machine-parsable output seperator (default: \\t)')
 
     options, args = parser.parse_args()
 
