@@ -183,7 +183,7 @@ class Vault(object):
                     sys.stdout.write(': ')
                     if headings[x].startswith('date_'):
                         sys.stdout.write(datetime.datetime.utcfromtimestamp(result[x]).strftime('%D %T'))
-                    elif x < 2:
+                    elif x < 3:
                         sys.stdout.write(self.decrypt(result[x]))
                     elif result[x]:
                         sys.stdout.write(result[x])
@@ -199,6 +199,7 @@ class Vault(object):
             result = self.db_query_all(select, self.encrypt(section))
             if result:
                 result = [map(self.decrypt, (name, password)) for name, password in result]
+                result.sort()
                 self.table(result, 'name', 'password', color=0)
             else:
                 self.fail('No entries found')
@@ -227,13 +228,14 @@ class Vault(object):
             result = [(self.decrypt(section), self.decrypt(name), 
                 datetime.datetime.utcfromtimestamp(date).strftime('%D %T')) \
                 for section, name, date in result]
+            print result
             self.table(result, 'section', 'name', 'date created', color=1)
         else:
             self.fail('No data found')
 
-    def do_set(self, section, name):
+    def do_set(self, section, name, *description):
         '''
-        set <section> <name>
+        set <section> <name> [<description>]
 
         Set the password for <name> in <section>. For example:
 
@@ -249,7 +251,7 @@ class Vault(object):
         p2 = self.ask_password('Password (confirm): ')
         if p1 != p2:
             self.fail('Password confirmation failed')
-        self.db_set(section, name, p1)
+        self.db_set(section, name, p1, ' '.join(description))
         self.info('Password set')
 
     # database stuff
@@ -304,7 +306,7 @@ class Vault(object):
         self.db_query(delete, self.encrypt(section), self.encrypt(name))
         self.db.commit()
 
-    def db_set(self, section, name, password):
+    def db_set(self, section, name, password, description):
         cursor = self.db.cursor()
         try:
             select = '''
@@ -318,12 +320,13 @@ class Vault(object):
             if exists is None:
                 insert = '''
                     INSERT INTO item
-                        (section_name, name, password, date_created, date_updated)
+                        (section_name, name, password, description, date_created, date_updated)
                     VALUES
-                        (?, ?, ?, ?, ?);
+                        (?, ?, ?, ?, ?, ?);
                     '''
                 self.db.execute(insert, (self.encrypt(section), self.encrypt(name), 
-                    self.encrypt(password), time.time(), time.time()))
+                    self.encrypt(password), self.encrypt(description),
+                    time.time(), time.time()))
             else:
                 update_id = exists[0]
                 update = '''
