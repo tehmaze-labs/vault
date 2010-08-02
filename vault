@@ -228,7 +228,6 @@ class Vault(object):
             result = [(self.decrypt(section), self.decrypt(name), 
                 datetime.datetime.utcfromtimestamp(date).strftime('%D %T')) \
                 for section, name, date in result]
-            print result
             self.table(result, 'section', 'name', 'date created', color=1)
         else:
             self.fail('No data found')
