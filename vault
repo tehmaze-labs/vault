@@ -5,6 +5,7 @@ import datetime
 import getpass
 import mcrypt
 import os
+import random
 import sqlite3
 import stat
 import struct
@@ -310,8 +311,23 @@ class Vault(object):
 
     def encrypt(self, data):
         try:
-            data = str(data)
+            # We can only store 63 bytes of data (+1 for nullbyte)
+            data = str(data)[:63]
             pack = struct.pack(self.STRUCT_ITEM, len(data), data)
+            try:
+                null = i = 0
+                while null < 5:
+                    null = pack.index('\x00', i) + 1
+                    i += 1
+                if null < len(pack):
+                    size = len(pack)
+                    pack = pack[:null]
+                    pads = len(pack)
+                    rots = sum(map(ord, pack))
+                    for x in xrange(pads, size):
+                        pack = pack + self.padding[(x - pads + rots) % len(self.padding)]
+            except ValueError:
+                pass
             return self.crypto.encrypt(pack, fixlength=1).encode('base64').replace('\n', '')
         finally:
             self.crypto.reinit()
@@ -325,9 +341,9 @@ class Vault(object):
                 if len(data) != size:
                     self.fail('Invalid key')
                 else:
-                    return data
+                    return data.split('\x00')[0]
             except (binascii.Error, struct.error, SystemError):
-                raise
+                #raise
                 self.fail('Invalid key')
         finally:
             self.crypto.reinit()
@@ -361,10 +377,11 @@ class Vault(object):
                     VALUES
                         (?);
                     '''
-                check = self.encrypt(str(uuid.uuid4()))
+                self.padding = ''.join(map(str, [uuid.uuid4(), uuid.uuid4()]))
+                check = self.encrypt(self.padding)
                 cursor.execute(insert, (check,))
             else:
-                check = self.decrypt(result[0])
+                self.padding = self.decrypt(result[0])
         finally:
             cursor.close()
 
