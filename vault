@@ -112,7 +112,7 @@ class Vault(object):
             except TypeError:
                 return self.do_help(args[0])
         else:
-            self.fail('%s: no such command' % (args[0],))
+            self.fail('No such command: %s' % (args[0],))
 
     def ask_password(self, prompt):
         sys.stdout.flush()
@@ -206,9 +206,10 @@ class Vault(object):
 
     def do_list(self, section=None):
         '''
-        list
+        list [<section>]
 
-        Show all sections and their entries.
+        Show all sections and their entries. If the section is omitted
+        all section names will be displayed.
         '''
         self.check_crypt()
         if section:
@@ -218,19 +219,25 @@ class Vault(object):
                  WHERE section_name = ?
                 '''
             result = self.db_query_all(select, self.encrypt(section))
+            if result:
+                result = [(self.decrypt(section), self.decrypt(name), 
+                    datetime.datetime.utcfromtimestamp(date).strftime('%D %T')) \
+                    for section, name, date in result]
+                result.sort()
+                self.table(result, 'section', 'name', 'date created', color=1)
+                return 0
         else:
             select = '''
-                SELECT section_name, name, date_created
-                  FROM item;
+                SELECT name
+                  FROM section;
                 '''
             result = self.db_query_all(select)
-        if result:
-            result = [(self.decrypt(section), self.decrypt(name), 
-                datetime.datetime.utcfromtimestamp(date).strftime('%D %T')) \
-                for section, name, date in result]
-            self.table(result, 'section', 'name', 'date created', color=1)
-        else:
-            self.fail('No data found')
+            if result:
+                result = [(self.decrypt(section),) for section, in result]
+                result.sort()
+                self.table(result, 'section', color=0)
+                return 0
+        self.fail('No data found')
 
     def do_set(self, section, name, *description):
         '''
@@ -257,14 +264,9 @@ class Vault(object):
 
     def db_query(self, query, *args):
         self.debug('SQL: %s (args=%r)' % (query, args))
-
-        cursor = self.db.cursor()
-        try:
-            result = cursor.execute(query, args)
-            self.debug('SQL: Got %d rows' % (result.rowcount,))
-            return result
-        finally:
-            cursor.close()
+        result = self.db.execute(query, args)
+        self.debug('SQL: Got %d rows' % (result.rowcount,))
+        return result
 
     def db_query_all(self, query, *args):
         return self.db_query(query, *args).fetchall()
