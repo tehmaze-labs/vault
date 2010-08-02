@@ -323,7 +323,7 @@ class Vault(object):
                         (?, ?, ?, ?, ?);
                     '''
                 self.db.execute(insert, (self.encrypt(section), self.encrypt(name), 
-                    password, time.time(), time.time()))
+                    self.encrypt(password), time.time(), time.time()))
             else:
                 update_id = exists[0]
                 update = '''
@@ -369,7 +369,8 @@ class Vault(object):
                 pack = self.crypto.decrypt(data, fixlength=1)
                 size, data = struct.unpack(self.STRUCT_ITEM, pack)
                 if len(data) != size:
-                    self.fail('Invalid key (%d <> %d)' % (len(data), size))
+                    self.debug('Decrypted size differs (%d <> %d)' % (len(data), size))
+                    self.fail('Invalid key')
                 else:
                     return data.split('\x00')[0]
             except (binascii.Error, struct.error, SystemError), e:
@@ -499,6 +500,9 @@ def run():
     options, args = parser.parse_args()
 
     vault = Vault(options)
+    if not options.keyfile and 'VAULT_SECRET' in os.environ:
+        vault.secret = os.environ['VAULT_SECRET']
+
     if args:
         return vault.run(args)
     else:
