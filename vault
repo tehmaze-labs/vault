@@ -30,6 +30,12 @@ class ANSI(object):
 
 class Vault(object):
     STRUCT_ITEM = '<L64p'
+    PASSWORD_CHARS = ''.join([
+        'abcdefghijklmnopqrstuvwxyz',
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        '0123456789',
+    ])
+    PASSWORD_CHARS_SPECIAL = '!@#$%^&*()_-+='
 
     def __init__(self, options):
         self.options = options
@@ -239,6 +245,44 @@ class Vault(object):
                 self.table(result, 'section', color=0)
                 return 0
         self.fail('No data found')
+
+    def do_pwgen(self, length=8, special=0):
+        '''
+        pwgen [<length>] [<special>]
+
+        Generate a secure random password of size <length>, defaults
+        to 8 characters. Optionally you can supply the required number
+        of special (non alpha-numeric) characters in the password, this
+        defaults to 0.
+        '''
+        try:
+            length = int(length)
+            special = int(special)
+        except ValueError:
+            return self.do_help('pwgen')
+        else:
+            if os.path.isfile('/dev/urandom'):
+                def random_char(chars):
+                    return chars[ord(os.urandom(1)) % len(chars)]
+            else:
+                def random_char(chars):
+                    return random.choice(chars)
+
+            password = []
+            specials = []
+            while len(password) < length:
+                password.append(random_char(self.PASSWORD_CHARS))
+
+            while len(specials) < special and len(specials) != len(password):
+                replace = None
+                while replace is None or replace in specials:
+                    replace = random.randint(0, len(password) - 1)
+                specials.append(replace)
+                password[replace] = random_char(self.PASSWORD_CHARS_SPECIAL)
+
+            password.append('\n')
+            sys.stdout.write(''.join(password))
+            sys.stdout.flush()
 
     def do_set(self, section, name, *description):
         '''

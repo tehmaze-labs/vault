@@ -59,3 +59,17 @@ For an overview of all available ``vault`` commands, use::
             list
             set
 
+You can use ``vault`` in scripts with the ``VAULT_SECRET`` enviroment
+variable. Also there is the ``--machine`` option to provide machine-
+parsable output::
+
+    shell% export VAULT_SECRET=secret
+    shell% vault -m list | tail -n +2 | while read SECTION; do
+    > vault -m list $SECTION 
+    > done
+    section	name	date_created
+    foo	bar	01/02/03 12:34:56
+    section	name	date_created
+    bar	foo	08/01/10 13:37:00
+    bar	biz	08/02/10 00:00:42
+
